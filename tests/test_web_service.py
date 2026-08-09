@@ -48,3 +48,27 @@ async def test_fetch_url_metadata_wraps_transport_errors() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(ValueError, match="failed to reach"):
             await fetch_url_metadata("https://example.com", client=client)
+
+
+async def test_fetch_url_metadata_creates_and_closes_its_own_client_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When no client is injected, the function should build (and clean up)
+    its own -- this covers that path without making a real network call, by
+    forcing every internally-constructed AsyncClient onto a MockTransport.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200)
+
+    real_init = httpx.AsyncClient.__init__
+
+    def patched_init(self: httpx.AsyncClient, *args: object, **kwargs: object) -> None:
+        kwargs["transport"] = httpx.MockTransport(handler)
+        real_init(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    result = await fetch_url_metadata("https://example.com")
+
+    assert result.status_code == 200

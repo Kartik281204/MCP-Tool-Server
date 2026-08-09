@@ -1,0 +1,21 @@
+services:
+  mcp-tool-server:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      # Copy .env.example to .env first (see README) -- values there fill
+      # in app_name/log_level/etc; host/port are pinned below regardless,
+      # since the container must always bind 0.0.0.0:8000 internally no
+      # matter what a locally-tuned .env happens to say.
+      - .env
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    restart: unless-stopped

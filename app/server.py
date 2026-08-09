@@ -53,12 +53,22 @@ mcp = create_server()
 
 
 def main() -> None:
-    """Run the MCP server using the transport configured in settings."""
+    """Run the MCP server using the transport configured in settings.
+
+    `stdio` runs FastMCP directly. `http` serves the FastAPI app (health
+    route + the MCP endpoint mounted alongside it) via uvicorn instead of
+    calling `mcp.run()` directly, so both are reachable on one port.
+    """
     settings = get_settings()
     if settings.transport == "stdio":
         mcp.run(transport="stdio")
-    else:
-        mcp.run(transport=settings.transport, host=settings.host, port=settings.port)
+        return
+
+    import uvicorn
+
+    from app.asgi import create_asgi_app
+
+    uvicorn.run(create_asgi_app(settings), host=settings.host, port=settings.port)
 
 
 if __name__ == "__main__":

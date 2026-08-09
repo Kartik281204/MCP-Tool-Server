@@ -42,3 +42,15 @@ async def test_convert_temperature_tool_is_callable_through_the_server(server) -
 async def test_invalid_input_surfaces_as_a_tool_error(server) -> None:
     with pytest.raises(ToolError):
         await server.call_tool("analyze_text", {"text": "   "})
+
+
+async def test_conversion_tool_translates_value_error_to_tool_error(server) -> None:
+    with pytest.raises(ToolError):
+        await server.call_tool(
+            "convert_temperature", {"value": -1, "from_unit": "kelvin", "to_unit": "celsius"}
+        )
+
+
+async def test_web_tool_translates_value_error_to_tool_error(server) -> None:
+    with pytest.raises(ToolError):
+        await server.call_tool("fetch_url_metadata", {"url": "ftp://example.com"})

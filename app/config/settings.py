@@ -44,6 +44,22 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Comma-separated bearer tokens for the MCP endpoint. Empty (the
+    # default) disables auth entirely -- deliberately open out of the box
+    # so `uv run python -m app.server` keeps working with zero setup. Set
+    # this before exposing the server anywhere it isn't fully trusted.
+    api_keys: str = ""
+
+    @property
+    def api_key_set(self) -> frozenset[str]:
+        """Parsed, non-empty API keys."""
+        return frozenset(key.strip() for key in self.api_keys.split(",") if key.strip())
+
+    @property
+    def auth_enabled(self) -> bool:
+        """Whether any API key is configured. See `api_keys` above."""
+        return bool(self.api_key_set)
+
     @property
     def is_production(self) -> bool:
         """Whether the server is running in the production environment."""

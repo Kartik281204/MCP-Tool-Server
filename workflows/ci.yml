@@ -1,0 +1,68 @@
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint, type-check, and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          # Pinned to match .python-version / the Dockerfile, not "latest",
+          # so CI is testing the same uv this project was built against.
+          version: "0.11.7"
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: ruff
+        run: uv run ruff check .
+
+      - name: mypy
+        run: uv run mypy app
+
+      - name: pytest
+        run: uv run pytest
+
+  docker:
+    name: Docker build & smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build -t mcp-tool-server .
+
+      - name: Smoke test container
+        run: |
+          cp .env.example .env
+          docker run -d --name smoke -p 8000:8000 --env-file .env -e MCP_HOST=0.0.0.0 mcp-tool-server
+
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:8000/health; then
+              echo "health check passed"
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "health check failed -- container logs:"
+          docker logs smoke
+          exit 1

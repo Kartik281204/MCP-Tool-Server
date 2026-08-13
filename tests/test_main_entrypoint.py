@@ -34,11 +34,11 @@ def test_main_serves_http_transport_via_uvicorn() -> None:
         patch("app.asgi.create_asgi_app") as mock_create_app,
         patch("uvicorn.run") as mock_uvicorn_run,
     ):
-        from app.server import main
+        from app.server import main, mcp
 
         main()
 
-    mock_create_app.assert_called_once_with(settings)
+    mock_create_app.assert_called_once_with(mcp, settings)
     mock_uvicorn_run.assert_called_once_with(
         mock_create_app.return_value, host="127.0.0.1", port=9000
     )

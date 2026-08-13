@@ -40,3 +40,18 @@ def test_invalid_log_level_is_rejected() -> None:
 def test_invalid_transport_is_rejected() -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, transport="carrier-pigeon")
+
+
+def test_api_key_set_parses_and_strips_comma_separated_keys() -> None:
+    settings = Settings(_env_file=None, api_keys=" key-a ,key-b,, key-c")
+
+    assert settings.api_key_set == frozenset({"key-a", "key-b", "key-c"})
+
+
+def test_auth_disabled_by_default() -> None:
+    assert Settings(_env_file=None).auth_enabled is False
+    assert Settings(_env_file=None).api_key_set == frozenset()
+
+
+def test_auth_enabled_when_any_key_configured() -> None:
+    assert Settings(_env_file=None, api_keys="one-key").auth_enabled is True

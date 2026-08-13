@@ -14,11 +14,13 @@ from fastapi.testclient import TestClient
 
 from app.asgi import create_asgi_app
 from app.config.settings import Settings
+from app.server import create_server
 
 
-def _client() -> TestClient:
-    settings = Settings(_env_file=None, app_name="test-server", app_version="1.2.3")
-    return TestClient(create_asgi_app(settings))
+def _client(settings: Settings | None = None) -> TestClient:
+    settings = settings or Settings(_env_file=None, app_name="test-server", app_version="1.2.3")
+    server = create_server(settings)
+    return TestClient(create_asgi_app(server, settings))
 
 
 def test_health_endpoint_reports_configured_name_and_version() -> None:

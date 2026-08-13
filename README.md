@@ -5,9 +5,11 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-3.x-6366f1)
 ![FastAPI](https://img.shields.io/badge/FastAPI-mounted-009688?logo=fastapi&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-32%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-multi--stage-2496ED?logo=docker&logoColor=white)
+![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
+![Auth](https://img.shields.io/badge/auth-API%20key%20(opt--in)-6b21a8)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 **A production-shaped [MCP](https://modelcontextprotocol.io/) tool server** built with
@@ -15,18 +17,20 @@
 
 </div>
 
-Three example tools, a REST health endpoint on the same port, 100% test
-coverage, and a multi-stage Docker build — built in six incremental,
-independently-verified phases.
+Three example tools, a REST health endpoint on the same port, opt-in API-key
+auth, 100% test coverage, CI on every push, and a multi-stage Docker build —
+built in eight incremental, independently-verified phases.
 
 ## Contents
 
 - [Why this exists](#why-this-exists)
 - [Architecture](#architecture)
 - [Request lifecycle](#request-lifecycle)
+- [Authentication](#authentication)
 - [Tools](#tools)
 - [Quick start](#quick-start)
 - [Docker](#docker)
+- [CI/CD](#cicd)
 - [Configuration](#configuration)
 - [Example usage](#example-usage)
 - [Testing](#testing)
@@ -53,6 +57,9 @@ before you read the code:
 - **Dependencies were added when first used, not upfront.** FastAPI wasn't
   added until the health endpoint needed it; `httpx` and `uvicorn` likewise.
   Nothing sits unused in the lockfile.
+- **Auth is opt-in, not bolted on as an afterthought.** `app/security/`
+  holds one job: verify a bearer token. It's a `TokenVerifier` FastMCP
+  already knows how to consume, not a custom middleware reinventing that.
 - **Two ASGI apps, one port** — see [Architecture](#architecture) below.
 
 ## Architecture
@@ -103,16 +110,18 @@ Nothing in `services/` or `models/` imports anything above it — that's what
 keeps business logic testable without spinning up any MCP or HTTP machinery.
 
 ```
+.github/workflows/  # CI: lint + type-check + test, and a Docker build/smoke-test job
 app/
 ├── server.py       # create_server(): builds the FastMCP instance + tool registry
-├── asgi.py         # create_asgi_app(): mounts FastMCP into FastAPI for the http transport
+├── asgi.py         # create_asgi_app(mcp, settings): mounts FastMCP into FastAPI for the http transport
 ├── config/         # Environment-driven settings (Pydantic v2 / pydantic-settings)
 ├── utils/          # Logging and other cross-cutting helpers
-├── api/            # Plain REST routes (currently just /health)
+├── security/       # Opt-in API-key bearer-token verification
+├── api/            # Plain REST routes (currently just /health, never auth-gated)
 ├── tools/          # MCP tool adapters: schema, metadata, ValueError -> ToolError translation
 ├── services/       # Pure business logic. No FastMCP import, anywhere.
 └── models/         # Pydantic schemas shared by tools/services/api
-tests/              # 32 tests, 100% line coverage (unit + integration, no real network calls)
+tests/              # 45 tests, 100% line coverage (unit + integration, no real network calls)
 ```
 
 ## Request lifecycle
@@ -128,30 +137,76 @@ it looks like once that's wired correctly:
 sequenceDiagram
     participant C as Client
     participant F as FastAPI (asgi.py)
+    participant Auth as Auth (security/)
     participant M as FastMCP session manager
     participant T as Tool adapter
     participant S as Service
 
     C->>F: POST /mcp (tools/call)
-    F->>M: routed via mounted app
-    M->>T: invoke tool function
-    T->>S: delegate to service
-    alt success
-        S-->>T: return value
-        T-->>M: Pydantic model
-        M-->>F: structured result
-        F-->>C: 200 + JSON-RPC result
-    else invalid input
-        S--)T: raise ValueError
-        T--)M: raise ToolError
-        M-->>F: JSON-RPC error
-        F-->>C: JSON-RPC error (is_error=true)
+    F->>Auth: check Authorization header
+    alt auth disabled or token valid
+        Auth-->>F: ok
+        F->>M: routed via mounted app
+        M->>T: invoke tool function
+        T->>S: delegate to service
+        alt success
+            S-->>T: return value
+            T-->>M: Pydantic model
+            M-->>F: structured result
+            F-->>C: 200 + JSON-RPC result
+        else invalid input
+            S--)T: raise ValueError
+            T--)M: raise ToolError
+            M-->>F: JSON-RPC error
+            F-->>C: JSON-RPC error (is_error=true)
+        end
+    else missing or invalid token
+        Auth-->>F: reject
+        F-->>C: 401 Unauthorized
     end
 ```
 
-`/health` is simpler — it never touches the MCP session manager at all; it's
-a plain FastAPI route that reads settings via dependency injection (see the
-[Testing](#testing) section for a real bug that caught).
+`/health` is simpler — it never touches the MCP session manager, or the auth
+check, at all; it's a plain FastAPI route that reads settings via dependency
+injection (see [Testing](#testing) for a real bug that caught).
+
+## Authentication
+
+Off by default, on by setting one environment variable:
+
+```bash
+MCP_API_KEYS=key-for-client-a,key-for-client-b
+```
+
+- **Empty (default): no auth.** Anyone who can reach the port can call any
+  tool. Fine for local exploration; not fine for anything reachable outside
+  your own machine.
+- **Set: bearer-token auth on `/mcp`, enforced by FastMCP itself.**
+  `app/security/api_key_auth.py` implements `TokenVerifier` — the
+  resource-server pattern FastMCP already understands, not a hand-rolled
+  middleware — checking each token against the configured set with
+  `hmac.compare_digest` (constant-time, so a valid key can't be inferred
+  faster via response-timing side channels).
+- **`/health` is never gated**, on purpose — infrastructure checking
+  liveness (Docker's `HEALTHCHECK`, a load balancer, a k8s probe) shouldn't
+  need credentials just to know the process is up.
+- **Multiple keys, not one shared secret** — supports rotation: issue a new
+  key, roll it out, then remove the old one from `MCP_API_KEYS` without any
+  downtime.
+
+This is deliberately a *pre-shared-key* scheme, appropriate for a small
+number of known/trusted callers. `fastmcp.server.auth.providers` bundles
+real OAuth/OIDC integrations (Auth0, WorkOS, GitHub, and others) for when
+per-user identity or third-party client registration is actually needed —
+reach for one of those rather than extending `ApiKeyVerifier` into
+something it isn't.
+
+```python
+from fastmcp import Client
+
+async with Client("http://localhost:8000/mcp", auth="key-for-client-a") as client:
+    await client.call_tool("analyze_text", {"text": "Hello!"})
+```
 
 ## Tools
 
@@ -214,10 +269,27 @@ docker run --rm -p 8000:8000 --env-file .env -e MCP_HOST=0.0.0.0 mcp-tool-server
 ```
 
 > **Note:** this Dockerfile follows the standard multi-stage `uv` pattern and
-> was reviewed carefully, but this environment had no Docker daemon available
-> to actually run `docker build` against — unlike the rest of this project,
-> it wasn't executed end-to-end. Worth a first build-and-run before you rely
-> on it.
+> was reviewed carefully, but this sandbox had no Docker daemon available to
+> actually run `docker build` against — unlike the rest of this project, it
+> wasn't executed end-to-end here. The `docker` job in
+> [`.github/workflows/ci.yml`](.github/workflows/ci.yml) builds and
+> smoke-tests the image on every push, which is where this actually gets
+> verified — check that it's green before relying on the image.
+
+## CI/CD
+
+Two jobs, on every push and PR to `main`:
+
+| Job | What it runs |
+| --- | --- |
+| `test` | `ruff check .`, `mypy app`, `uv run pytest` (100% coverage enforced by the test suite itself, not a separate gate) |
+| `docker` | `docker build`, then runs the image and polls `/health` until it's up — the actual verification this project's Dockerfile didn't get locally (see the note above) |
+
+`astral-sh/setup-uv` and `actions/checkout` are pinned to a specific commit
+SHA rather than a mutable tag (`@v9.0.0` as a comment for readability, but
+the SHA is what actually runs) — a floating tag can be repointed by whoever
+controls the action's repo; a SHA can't. Standard supply-chain hardening
+for anything that runs arbitrary code in CI.
 
 ## Configuration
 
@@ -230,6 +302,7 @@ full, commented list. The ones worth knowing about:
 | `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `8000` | Only used for the `http` transport |
 | `MCP_ENVIRONMENT` | `development` | `development` \| `staging` \| `production` |
 | `MCP_LOG_LEVEL` | `INFO` | Standard library log level name |
+| `MCP_API_KEYS` | *(empty)* | Comma-separated bearer tokens; empty disables auth entirely — see [Authentication](#authentication) |
 | `FASTMCP_CHECK_FOR_UPDATES` | `stable` | FastMCP pings PyPI on startup by default; set `off` in production |
 
 ## Example usage
@@ -274,21 +347,34 @@ async with Client(mcp) as client:
 ## Testing
 
 ```bash
-uv run pytest              # 32 tests, coverage report on by default (see pyproject.toml)
+uv run pytest              # 45 tests, coverage report on by default (see pyproject.toml)
 uv run ruff check .
 uv run mypy app
 ```
 
-Coverage is 100% across all 217 statements in `app/`. That number is a
+The same three commands run in CI on every push — see [CI/CD](#cicd).
+
+Coverage is 100% across all 244 statements in `app/`. That number is a
 byproduct of testing real behavior (every tool's error path, the settings
 validation, the `main()` transport dispatch, the FastAPI lifespan wiring),
 not a target chased for its own sake — the last few percentage points came
 directly from `pytest --cov-report=term-missing` pointing at genuine gaps,
-including one real bug it caught: `create_asgi_app(settings)` accepted a
-`settings` argument that the health route was silently ignoring in favor of
-the global cached singleton (FastAPI's `Depends(get_settings)` doesn't know
-about a `settings` value constructed elsewhere unless you override the
-dependency), fixed in `app/asgi.py`.
+including two real bugs it caught:
+
+- `create_asgi_app(settings)` accepted a `settings` argument that the
+  health route was silently ignoring in favor of the global cached
+  singleton (FastAPI's `Depends(get_settings)` doesn't know about a
+  `settings` value constructed elsewhere unless you override the
+  dependency) — fixed with a dependency override in `app/asgi.py`.
+- Testing auth by connecting `fastmcp.Client` directly to the in-memory
+  `FastMCP` instance silently passed with *no* token required, regardless
+  of configuration — because that transport bypasses HTTP (and therefore
+  headers) entirely, not because auth was broken. It also revealed
+  `create_asgi_app` was closing over a module-level app built from default
+  settings at import time, so passing different auth config into it did
+  nothing. Both are fixed: `create_asgi_app(mcp, settings)` now takes the
+  server instance explicitly, and auth tests go through real HTTP via
+  `TestClient` with an actual `Authorization` header (`tests/test_auth.py`).
 
 Network-dependent tests (`test_web_service.py`) use `httpx.MockTransport` —
 no real HTTP calls, no flakiness, no dependency on network access in
@@ -302,6 +388,8 @@ whatever environment runs the suite.
 - [x] Phase 4 — Full unit test suite
 - [x] Phase 5 — Docker + docker-compose
 - [x] Phase 6 — Full documentation pass
+- [x] Phase 7 — CI/CD (GitHub Actions: lint/type/test + Docker build & smoke test)
+- [x] Phase 8 — Opt-in API-key authentication for the MCP endpoint
 
 ## License
 

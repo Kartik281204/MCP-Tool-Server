@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-tool-server-config
+data:
+  MCP_HOST: "0.0.0.0"
+  MCP_PORT: "8000"
+  MCP_ENVIRONMENT: "production"
+  MCP_LOG_LEVEL: "INFO"
+  FASTMCP_CHECK_FOR_UPDATES: "off"

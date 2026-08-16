@@ -1,0 +1,52 @@
+# fly.toml -- Fly.io deployment config for mcp-tool-server.
+# https://fly.io/docs/reference/configuration/
+#
+# First-time setup:
+#   fly launch --no-deploy          # creates the app, reuses this file
+#   fly secrets set MCP_API_KEYS="your-key-here"   # optional, see README
+#   fly deploy
+#
+# `app` must be globally unique across all of Fly -- change it before deploying.
+
+app = "mcp-tool-server"
+primary_region = "iad"
+
+# Fly's own default is SIGINT. SIGTERM matches what Docker and Kubernetes
+# send, so the same shutdown path (uvicorn's built-in graceful drain) runs
+# no matter which platform is stopping the container.
+kill_signal = "SIGTERM"
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+MCP_ENVIRONMENT = "production"
+MCP_LOG_LEVEL = "INFO"
+FASTMCP_CHECK_FOR_UPDATES = "off"
+# MCP_HOST / MCP_PORT are not set here -- the Dockerfile already defaults
+# them to 0.0.0.0:8000, which matches internal_port below.
+# MCP_API_KEYS is a secret, not a plain env var -- see the note above.
+
+[http_service]
+internal_port = 8000
+force_https = true
+auto_stop_machines = "stop"
+auto_start_machines = true
+min_machines_running = 0
+
+  [http_service.concurrency]
+  type = "requests"
+  soft_limit = 200
+  hard_limit = 250
+
+[[http_service.checks]]
+grace_period = "10s"
+interval = "15s"
+method = "GET"
+timeout = "5s"
+path = "/health"
+
+[[vm]]
+memory = "256mb"
+cpu_kind = "shared"
+cpus = 1

@@ -1,0 +1,14 @@
+# k8s/kustomization.yaml
+#
+# secret.example.yaml is deliberately NOT listed here -- it's a template,
+# not something to apply directly. Create the real Secret separately (see
+# the comment in that file), then `kubectl apply -k k8s/`.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - service.yaml
+  - configmap.yaml
+  - hpa.yaml

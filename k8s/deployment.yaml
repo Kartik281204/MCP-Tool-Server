@@ -1,0 +1,86 @@
+# k8s/deployment.yaml -- reference Kubernetes deployment for mcp-tool-server.
+#
+# securityContext mirrors the Dockerfile: non-root uid 1000, no capabilities,
+# read-only root filesystem (the app writes nothing to disk at runtime --
+# UV_COMPILE_BYTECODE=1 at build time means it doesn't even need to write
+# .pyc files; /tmp is mounted separately below purely as a defensive
+# default for anything in the stack that assumes it's writable).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-tool-server
+  labels:
+    app: mcp-tool-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: mcp-tool-server
+  template:
+    metadata:
+      labels:
+        app: mcp-tool-server
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mcp-tool-server
+          image: ghcr.io/OWNER/mcp-tool-server:latest # replace OWNER -- see .github/workflows/publish.yml
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: mcp-tool-server-config
+            - secretRef:
+                name: mcp-tool-server-secrets
+                optional: true # auth is opt-in -- see README's Authentication section
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          # Readiness gates traffic (checked often, low tolerance -- a slow
+          # instance should stop receiving requests quickly). Liveness
+          # restarts the pod (checked less often, higher tolerance -- a
+          # restart is disruptive, so it shouldn't trigger on a brief blip).
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+          # Gives the endpoint controller time to remove this pod from the
+          # Service before SIGTERM arrives, so in-flight rolling updates
+          # don't route new requests to a pod that's already shutting down.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: tmp
+          emptyDir: {}

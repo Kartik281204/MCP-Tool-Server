@@ -1,0 +1,73 @@
+# service.yaml -- Cloud Run declarative deployment for mcp-tool-server.
+# https://cloud.google.com/run/docs/reference/yaml/v1
+#
+# Requires an image already pushed somewhere Cloud Run can pull from
+# (Artifact Registry, or ghcr.io/OWNER/mcp-tool-server from the CI publish
+# workflow -- see .github/workflows/publish.yml). Replace IMAGE_URL below,
+# then:
+#
+#   gcloud run services replace deploy/cloudrun/service.yaml --region=us-central1
+#
+# MCP_API_KEYS is deliberately absent from `env:` -- set it via Secret
+# Manager and reference it with `--set-secrets`, or uncomment the
+# `env: valueFrom.secretKeyRef` block below, rather than committing it here.
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: mcp-tool-server
+  labels:
+    cloud.googleapis.com/location: us-central1
+  annotations:
+    run.googleapis.com/ingress: all
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "10"
+        # This app has no background work outside request handling, so the
+        # default (CPU only allocated during request processing) is the
+        # right, cheaper setting -- left implicit rather than pinned here.
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 30
+      containers:
+        - image: IMAGE_URL # e.g. us-docker.pkg.dev/PROJECT/REPO/mcp-tool-server:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: MCP_HOST
+              value: "0.0.0.0"
+            - name: MCP_PORT
+              value: "8000"
+            - name: MCP_ENVIRONMENT
+              value: "production"
+            - name: MCP_LOG_LEVEL
+              value: "INFO"
+            - name: FASTMCP_CHECK_FOR_UPDATES
+              value: "off"
+            # - name: MCP_API_KEYS
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: mcp-api-keys
+            #       key: latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          # Mirrors Kubernetes probe syntax -- Cloud Run's container health
+          # checks are built on the same API. Startup gates traffic until
+          # /health responds; liveness restarts the instance if it stops.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30

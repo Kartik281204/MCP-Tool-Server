@@ -11,6 +11,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 TransportName = Literal["stdio", "http", "sse"]
@@ -30,6 +31,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix="MCP_",
         extra="ignore",
+        # `port` below has an explicit validation_alias; without this,
+        # pydantic v2 stops accepting the plain field name as a
+        # constructor kwarg for that field, breaking `Settings(port=...)`
+        # everywhere the test suite (and anything else) constructs
+        # Settings directly rather than through the environment.
+        populate_by_name=True,
     )
 
     app_name: str = "mcp-tool-server"
@@ -42,7 +49,14 @@ class Settings(BaseSettings):
     # service, which is what the Docker deployment (a later phase) expects.
     transport: TransportName = "http"
     host: str = "0.0.0.0"
-    port: int = 8000
+    # Some PaaS platforms (Railway, Heroku) assign a port dynamically and
+    # inject it as a bare `PORT` env var the app is expected to bind --
+    # there's no way to rename that on their end, so it's accepted here as
+    # a fallback. `MCP_PORT` wins if both happen to be set, so an explicit
+    # override still behaves exactly like every other setting in this
+    # class. Fly/Cloud Run/Kubernetes all use a fixed, developer-chosen
+    # port instead and are unaffected by this either way.
+    port: int = Field(default=8000, validation_alias=AliasChoices("MCP_PORT", "PORT"))
 
     # Comma-separated bearer tokens for the MCP endpoint. Empty (the
     # default) disables auth entirely -- deliberately open out of the box

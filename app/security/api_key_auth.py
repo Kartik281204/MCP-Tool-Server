@@ -17,10 +17,31 @@ receives this provider; `app.api.health` is never touched by it.
 from __future__ import annotations
 
 import hmac
+import logging
 
 from fastmcp.server.auth import AccessToken, TokenVerifier
 
 from app.config.settings import Settings
+
+logger = logging.getLogger(__name__)
+
+# Below this length, even a short prefix reveals too large a fraction of
+# the token to be meaningfully safer than showing nothing.
+_MIN_LENGTH_FOR_PARTIAL_REVEAL = 8
+_VISIBLE_PREFIX_CHARS = 4
+
+
+def mask_token(token: str) -> str:
+    """Mask a token for safe logging: a short prefix and a length, no more.
+
+    Never reveals enough to narrow a brute-force search or let two log
+    lines be correlated back to the same key by a reader who doesn't
+    already have it. This is the *only* form a submitted or configured
+    token should ever take in a log line anywhere in this codebase.
+    """
+    if len(token) <= _MIN_LENGTH_FOR_PARTIAL_REVEAL:
+        return "***"
+    return f"{token[:_VISIBLE_PREFIX_CHARS]}...({len(token)} chars)"
 
 
 class ApiKeyVerifier(TokenVerifier):
@@ -35,7 +56,14 @@ class ApiKeyVerifier(TokenVerifier):
         # a plain `token in self._valid_keys` membership check, so a valid
         # key can't be inferred faster via response-timing side channels.
         if not any(hmac.compare_digest(token, key) for key in self._valid_keys):
+            # WARNING, not DEBUG: a failed auth attempt is security-relevant
+            # (could be a stale client, a typo, or a scan) and should be
+            # visible at whatever level production actually runs at.
+            logger.warning("api_key_auth_failed token=%s", mask_token(token))
             return None
+        # DEBUG, not INFO: this fires on every successful call and would be
+        # noisy at a level production typically runs at.
+        logger.debug("api_key_auth_succeeded token=%s", mask_token(token))
         return AccessToken(token=token, client_id="api-key-client", scopes=[])
 
 

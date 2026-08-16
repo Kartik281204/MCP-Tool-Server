@@ -10,12 +10,37 @@ this test file exercises.
 
 from __future__ import annotations
 
+import logging
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.asgi import create_asgi_app
 from app.config.settings import Settings
-from app.security.api_key_auth import ApiKeyVerifier, build_auth_provider
+from app.security.api_key_auth import ApiKeyVerifier, build_auth_provider, mask_token
 from app.server import create_server
+
+# --- mask_token ----------------------------------------------------------
+
+
+def test_mask_token_hides_short_tokens_entirely() -> None:
+    assert mask_token("") == "***"
+    assert mask_token("short1") == "***"
+    assert mask_token("exactly8") == "***"  # boundary: 8 chars, still fully masked
+
+
+def test_mask_token_shows_only_a_short_prefix_and_length_for_longer_tokens() -> None:
+    masked = mask_token("a-reasonably-long-secret-key-value")
+
+    assert masked == "a-re...(34 chars)"
+    assert "reasonably-long-secret" not in masked
+
+
+def test_mask_token_never_reveals_the_full_token() -> None:
+    real_key = "super-secret-production-api-key-do-not-leak"
+
+    assert real_key not in mask_token(real_key)
+
 
 # --- Unit tests --------------------------------------------------------
 
@@ -39,6 +64,34 @@ async def test_verifier_rejects_empty_token_against_empty_key_set() -> None:
     verifier = ApiKeyVerifier(frozenset())
 
     assert await verifier.verify_token("anything") is None
+
+
+async def test_failed_verification_logs_only_the_masked_token(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    real_key = "the-one-and-only-valid-key-nobody-should-see"
+    verifier = ApiKeyVerifier(frozenset({real_key}))
+
+    with caplog.at_level(logging.WARNING, logger="app.security.api_key_auth"):
+        await verifier.verify_token("some-wrong-submitted-token-value")
+
+    full_log_text = caplog.text
+    assert real_key not in full_log_text
+    assert "some-wrong-submitted-token-value" not in full_log_text
+    assert "api_key_auth_failed" in full_log_text
+
+
+async def test_successful_verification_logs_only_the_masked_token(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    real_key = "the-one-and-only-valid-key-nobody-should-see"
+    verifier = ApiKeyVerifier(frozenset({real_key}))
+
+    with caplog.at_level(logging.DEBUG, logger="app.security.api_key_auth"):
+        await verifier.verify_token(real_key)
+
+    assert real_key not in caplog.text
+    assert "api_key_auth_succeeded" in caplog.text
 
 
 def test_build_auth_provider_is_none_when_no_keys_configured() -> None:

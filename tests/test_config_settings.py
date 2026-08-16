@@ -55,3 +55,31 @@ def test_auth_disabled_by_default() -> None:
 
 def test_auth_enabled_when_any_key_configured() -> None:
     assert Settings(_env_file=None, api_keys="one-key").auth_enabled is True
+
+
+def test_port_defaults_to_8000_with_neither_var_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MCP_PORT", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+
+    assert Settings(_env_file=None).port == 8000
+
+
+def test_port_falls_back_to_bare_port_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Railway (and Heroku) assign a port dynamically via a bare `PORT` env
+    var with no `MCP_` prefix -- this is the fallback that makes the app
+    actually reachable there instead of listening on the wrong port.
+    """
+    monkeypatch.delenv("MCP_PORT", raising=False)
+    monkeypatch.setenv("PORT", "5555")
+
+    assert Settings(_env_file=None).port == 5555
+
+
+def test_mcp_port_takes_precedence_over_bare_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit MCP_PORT should win over a platform-injected PORT, same
+    as every other setting in this class being explicitly overridable.
+    """
+    monkeypatch.setenv("MCP_PORT", "9999")
+    monkeypatch.setenv("PORT", "5555")
+
+    assert Settings(_env_file=None).port == 9999

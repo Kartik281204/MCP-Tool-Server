@@ -5,10 +5,11 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-3.x-6366f1)
 ![FastAPI](https://img.shields.io/badge/FastAPI-mounted-009688?logo=fastapi&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-45%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-multi--stage-2496ED?logo=docker&logoColor=white)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
+![Deploy](https://img.shields.io/badge/deploy-Fly.io%20%C2%B7%20Cloud%20Run%20%C2%B7%20K8s%20%C2%B7%20Railway-326CE5?logo=kubernetes&logoColor=white)
 ![Auth](https://img.shields.io/badge/auth-API%20key%20(opt--in)-6b21a8)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -18,8 +19,9 @@
 </div>
 
 Three example tools, a REST health endpoint on the same port, opt-in API-key
-auth, 100% test coverage, CI on every push, and a multi-stage Docker build —
-built in eight incremental, independently-verified phases.
+auth, 100% test coverage, CI that publishes a real image on every merge, and
+ready-to-use deployment configs for Fly.io, Cloud Run, Kubernetes, and Railway —
+built in nine incremental, independently-verified phases.
 
 ## Contents
 
@@ -31,6 +33,7 @@ built in eight incremental, independently-verified phases.
 - [Quick start](#quick-start)
 - [Docker](#docker)
 - [CI/CD](#cicd)
+- [Deployment](#deployment)
 - [Configuration](#configuration)
 - [Example usage](#example-usage)
 - [Testing](#testing)
@@ -110,7 +113,11 @@ Nothing in `services/` or `models/` imports anything above it — that's what
 keeps business logic testable without spinning up any MCP or HTTP machinery.
 
 ```
-.github/workflows/  # CI: lint + type-check + test, and a Docker build/smoke-test job
+.github/workflows/  # CI: lint + type-check + test, Docker build/smoke-test, GHCR publish
+fly.toml             # Fly.io deployment config
+railway.json          # Railway deployment config
+deploy/cloudrun/      # Cloud Run declarative service spec
+k8s/                  # Kubernetes manifests (Deployment, Service, HPA, ConfigMap, Secret template)
 app/
 ├── server.py       # create_server(): builds the FastMCP instance + tool registry
 ├── asgi.py         # create_asgi_app(mcp, settings): mounts FastMCP into FastAPI for the http transport
@@ -121,7 +128,7 @@ app/
 ├── tools/          # MCP tool adapters: schema, metadata, ValueError -> ToolError translation
 ├── services/       # Pure business logic. No FastMCP import, anywhere.
 └── models/         # Pydantic schemas shared by tools/services/api
-tests/              # 45 tests, 100% line coverage (unit + integration, no real network calls)
+tests/              # 50 tests, 100% line coverage (unit + integration, no real network calls)
 ```
 
 ## Request lifecycle
@@ -208,6 +215,34 @@ async with Client("http://localhost:8000/mcp", auth="key-for-client-a") as clien
     await client.call_tool("analyze_text", {"text": "Hello!"})
 ```
 
+**Keeping keys out of logs and the repo, specifically:**
+
+- Every configured/submitted token is logged, if at all, only through
+  `mask_token()` — a short prefix and a length (`"a-re...(34 chars)"`),
+  enforced by tests that assert the *real* value never appears in
+  `caplog` output for either a successful or failed check
+  (`tests/test_auth.py`). Before this, `verify_token` logged nothing at
+  all about auth attempts — a real observability gap, not a deliberate
+  safety choice, closed alongside the masking rather than left as a TODO.
+- Confirmed directly (not assumed) that neither FastMCP's own 401 response
+  body/headers nor its internal log line echo back a submitted token or a
+  configured key — checked with a real request carrying a token designed
+  to be obviously identifiable if it leaked.
+- `.github/workflows/ci.yml` runs [`gitleaks`](https://github.com/gitleaks/gitleaks)
+  against full git history on every push and PR, and `publish` won't run
+  if it finds anything — installed as the plain open-source binary
+  directly rather than via the official `gitleaks-action` wrapper, which
+  requires a paid license for organization (not personal) accounts as of
+  v3. Verified locally against this exact repo (clean) and against a
+  planted fake credential in an isolated scratch repo (correctly caught,
+  exit code 1) before being wired into CI.
+- No real key has ever existed in this repository — `.env.example` ships
+  the variable empty, `k8s/secret.example.yaml` is obvious placeholder
+  text and is deliberately excluded from `kustomization.yaml`, and every
+  value that looks like a key in tests or docs (`"secret-key"`,
+  `"key-for-client-a"`, ...) is a fixture, confirmed by running `gitleaks`
+  itself against the repo, not just by eyeballing it.
+
 ## Tools
 
 | Tool | Style | Tags | Description |
@@ -283,13 +318,105 @@ Two jobs, on every push and PR to `main`:
 | Job | What it runs |
 | --- | --- |
 | `test` | `ruff check .`, `mypy app`, `uv run pytest` (100% coverage enforced by the test suite itself, not a separate gate) |
+| `secret-scan` | `gitleaks` against full git history — see [Authentication](#authentication) for why it's the plain binary, not the official action |
 | `docker` | `docker build`, then runs the image and polls `/health` until it's up — the actual verification this project's Dockerfile didn't get locally (see the note above) |
+| `publish` | Only on push to `main`, and only if `test`, `secret-scan`, and `docker` all pass: builds and pushes to `ghcr.io/OWNER/mcp-tool-server` (`:latest` and `:sha-xxxxxxx`) — see [Deployment](#deployment) |
 
 `astral-sh/setup-uv` and `actions/checkout` are pinned to a specific commit
 SHA rather than a mutable tag (`@v9.0.0` as a comment for readability, but
 the SHA is what actually runs) — a floating tag can be repointed by whoever
 controls the action's repo; a SHA can't. Standard supply-chain hardening
 for anything that runs arbitrary code in CI.
+
+## Deployment
+
+This is a stateless, single-process HTTP service with every setting
+externalized to environment variables — about as close to "deploy anywhere
+that runs a container" as an app gets. Four concrete targets are checked
+in rather than just described:
+
+```mermaid
+flowchart LR
+    Dev["git push main"] --> CI
+
+    subgraph CI["CI - .github/workflows/ci.yml"]
+        direction TB
+        T["test: ruff + mypy + pytest"] --> SS["secret-scan: gitleaks"]
+        SS --> D["docker: build + smoke test"]
+        D --> P["publish: build + push"]
+    end
+
+    P --> GHCR["ghcr.io/OWNER/mcp-tool-server"]
+
+    GHCR --> Fly["Fly.io\nfly.toml"]
+    GHCR --> CloudRun["Cloud Run\ndeploy/cloudrun/service.yaml"]
+    GHCR --> K8s["Kubernetes\nk8s/"]
+    Dev -.Dockerfile, no GHCR needed.-> Railway["Railway\nrailway.json"]
+
+    classDef ci fill:#eef2ff,stroke:#4338ca,color:#1e1b4b
+    classDef registry fill:#fff7ed,stroke:#c2410c,color:#431407
+    classDef target fill:#ecfdf5,stroke:#047857,color:#022c22
+
+    class T,SS,D,P ci
+    class GHCR registry
+    class Fly,CloudRun,K8s,Railway target
+```
+
+The `publish` job in CI builds and pushes to GHCR on every merge to `main`
+(after `test` and `docker` both pass, not before) — that's what makes the
+manifests below reference a real, pullable image instead of a hypothetical
+one. Replace `OWNER` in each file with the actual GitHub owner/repo.
+
+| Target | File | Notes |
+| --- | --- | --- |
+| **Fly.io** | [`fly.toml`](fly.toml) | Fastest path to a live URL. `fly launch --no-deploy` once, then `fly deploy`. `kill_signal = "SIGTERM"` is set explicitly — Fly's own default is SIGINT, and this keeps shutdown behavior identical across all targets. |
+| **Cloud Run** | [`deploy/cloudrun/service.yaml`](deploy/cloudrun/service.yaml) | Declarative Knative spec; `gcloud run services replace` to apply. Startup/liveness probes against `/health` mirror Kubernetes probe syntax directly. |
+| **Kubernetes** | [`k8s/`](k8s/) | `deployment.yaml` (security-hardened: non-root uid 1000 matching the Dockerfile, read-only root filesystem, all capabilities dropped, a `preStop` sleep so rolling updates drain cleanly), `service.yaml`, `configmap.yaml`, `hpa.yaml` (2-10 replicas on 70% CPU), and `secret.example.yaml` — a template, deliberately excluded from `kustomization.yaml` so it's never accidentally applied as-is. `kubectl apply -k k8s/`. |
+| **Railway** | [`railway.json`](railway.json) | Detects the Dockerfile directly — connect the repo and it deploys, no GHCR step needed. `restartPolicyType: "ON_FAILURE"`, not `"ALWAYS"`: the latter restarts even on an intentional shutdown, which isn't what you want for a normal deploy/redeploy cycle. |
+
+**Railway specifically needed a real code fix, not just a config file.**
+Fly/Cloud Run/Kubernetes all let *you* pick a fixed port and configure the
+platform to route to it. Railway instead assigns a port dynamically and
+injects it as a bare `PORT` env var with no way to rename it — and this
+app only read `MCP_PORT`. Without a fix, Railway would've considered the
+deploy healthy at the container level while every request 404'd at the
+edge, since traffic would arrive on the port *Railway* picked while the
+app listened on 8000 regardless. Fixed in `app/config/settings.py` with
+`validation_alias=AliasChoices("MCP_PORT", "PORT")` — `MCP_PORT` still
+wins if both are set, so this is purely additive for every other target.
+One second-order bug surfaced while fixing the first: the Dockerfile baked
+`MCP_PORT=8000` in as an image-level default, which — since `MCP_PORT`
+takes precedence — would have silently shadowed Railway's real port on
+every deploy regardless of the fix above. Removed; `app/config/settings.py`
+already defaults to 8000 on its own with no env var set at all, so the
+Dockerfile default was pure redundancy that happened to also be actively
+wrong for this one target. Verified with a real boot under simulated
+Railway conditions (`PORT` set, `MCP_PORT` deliberately absent) — the app
+came up on the assigned port and, just as importantly, confirmed *not*
+listening on 8000 at all.
+
+**Secrets, consistently:** `MCP_API_KEYS` is never written into any of
+these files. Fly uses `fly secrets set`; Cloud Run uses Secret Manager via
+`--set-secrets` (a commented `secretKeyRef` block shows where); Kubernetes
+uses a separately-created `Secret` that the Deployment references with
+`optional: true`; Railway uses its dashboard/CLI Variables (`railway
+variables set`) — so the app runs identically with or without it,
+matching [Authentication](#authentication)'s "empty means disabled"
+default.
+
+**On graceful shutdown:** uvicorn drains in-flight requests on `SIGTERM` by
+default; this was exercised (not just assumed) throughout development via
+`timeout N uv run python -m app.server`, which sends `SIGTERM` and waits —
+every such run exited cleanly on its own well within the timeout, with no
+forced `SIGKILL` needed. The Kubernetes manifest's `preStop` hook and
+`terminationGracePeriodSeconds: 30` build in margin around that same path
+for rolling updates specifically.
+
+> **Same caveat as the Dockerfile itself:** these four configs were
+> written carefully and cross-checked against each platform's current
+> documentation (both Fly's and Railway's schemas have changed before), and
+> validated for syntax — but none were applied against a real Fly app, GCP
+> project, or cluster from this sandbox. Treat first deploys accordingly.
 
 ## Configuration
 
@@ -347,14 +474,14 @@ async with Client(mcp) as client:
 ## Testing
 
 ```bash
-uv run pytest              # 45 tests, coverage report on by default (see pyproject.toml)
+uv run pytest              # 50 tests, coverage report on by default (see pyproject.toml)
 uv run ruff check .
 uv run mypy app
 ```
 
 The same three commands run in CI on every push — see [CI/CD](#cicd).
 
-Coverage is 100% across all 244 statements in `app/`. That number is a
+Coverage is 100% across all 254 statements in `app/`. That number is a
 byproduct of testing real behavior (every tool's error path, the settings
 validation, the `main()` transport dispatch, the FastAPI lifespan wiring),
 not a target chased for its own sake — the last few percentage points came
@@ -389,7 +516,8 @@ whatever environment runs the suite.
 - [x] Phase 5 — Docker + docker-compose
 - [x] Phase 6 — Full documentation pass
 - [x] Phase 7 — CI/CD (GitHub Actions: lint/type/test + Docker build & smoke test)
-- [x] Phase 8 — Opt-in API-key authentication for the MCP endpoint
+- [x] Phase 8 — Opt-in API-key authentication for the MCP endpoint (+ masked audit logging, `gitleaks` in CI)
+- [x] Phase 9 — Deployability: GHCR image publish + Fly.io / Cloud Run / Kubernetes / Railway configs
 
 ## License
 

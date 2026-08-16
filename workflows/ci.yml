@@ -41,6 +41,28 @@ jobs:
       - name: pytest
         run: uv run pytest
 
+  secret-scan:
+    name: Scan for committed secrets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history -- a secret removed in a later commit is still a leak
+
+      # The official gitleaks-action wrapper requires a paid license for
+      # organization accounts (not personal ones) as of v3. The underlying
+      # gitleaks CLI itself is fully open-source with no such requirement,
+      # so it's installed and run directly here instead of via that action.
+      - name: Install gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            | tar -xz gitleaks
+          chmod +x gitleaks
+
+      - name: Scan
+        run: ./gitleaks git . -v
+
   docker:
     name: Docker build & smoke test
     runs-on: ubuntu-latest
@@ -70,7 +92,7 @@ jobs:
 
   publish:
     name: Publish image to GHCR
-    needs: [test, docker]
+    needs: [test, docker, secret-scan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

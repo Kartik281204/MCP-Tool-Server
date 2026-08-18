@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-3.x-6366f1)
 ![FastAPI](https://img.shields.io/badge/FastAPI-mounted-009688?logo=fastapi&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-53%20passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-multi--stage-2496ED?logo=docker&logoColor=white)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
@@ -113,11 +113,13 @@ Nothing in `services/` or `models/` imports anything above it — that's what
 keeps business logic testable without spinning up any MCP or HTTP machinery.
 
 ```
-.github/workflows/  # CI: lint + type-check + test, Docker build/smoke-test, GHCR publish
+.github/workflows/  # CI: lint + type-check + test, secret scan, Docker build/smoke-test, GHCR publish
 fly.toml             # Fly.io deployment config
 railway.json          # Railway deployment config
 deploy/cloudrun/      # Cloud Run declarative service spec
 k8s/                  # Kubernetes manifests (Deployment, Service, HPA, ConfigMap, Secret template)
+assets/               # README charts (PNG, generated from real data -- see scripts/)
+scripts/              # generate_charts.py: regenerates assets/*.png; not part of the app
 app/
 ├── server.py       # create_server(): builds the FastMCP instance + tool registry
 ├── asgi.py         # create_asgi_app(mcp, settings): mounts FastMCP into FastAPI for the http transport
@@ -128,7 +130,7 @@ app/
 ├── tools/          # MCP tool adapters: schema, metadata, ValueError -> ToolError translation
 ├── services/       # Pure business logic. No FastMCP import, anywhere.
 └── models/         # Pydantic schemas shared by tools/services/api
-tests/              # 50 tests, 100% line coverage (unit + integration, no real network calls)
+tests/              # 53 tests, 100% line coverage (unit + integration, no real network calls)
 ```
 
 ## Request lifecycle
@@ -474,14 +476,24 @@ async with Client(mcp) as client:
 ## Testing
 
 ```bash
-uv run pytest              # 50 tests, coverage report on by default (see pyproject.toml)
+uv run pytest              # 53 tests, coverage report on by default (see pyproject.toml)
 uv run ruff check .
 uv run mypy app
 ```
 
 The same three commands run in CI on every push — see [CI/CD](#cicd).
 
-Coverage is 100% across all 254 statements in `app/`. That number is a
+<p align="center">
+  <img src="assets/test_growth.png" width="720" alt="Line chart showing the test suite growing from 3 tests in Phase 1 to 53 in Phase 9, plateauing at 32 through the Docker/docs/CI phases">
+</p>
+
+Real milestones, not a smoothed curve — Phases 5-7 (Docker, docs, CI/CD)
+genuinely added no new Python tests, and the chart shows that flat instead
+of hiding it. The two jumps are Phase 4 (closing coverage gaps found by
+`--cov-report=term-missing`) and Phase 8 (auth plus the masked-logging
+hardening that came out of testing it).
+
+Coverage is 100% across all 255 statements in `app/`. That number is a
 byproduct of testing real behavior (every tool's error path, the settings
 validation, the `main()` transport dispatch, the FastAPI lifespan wiring),
 not a target chased for its own sake — the last few percentage points came
@@ -502,6 +514,31 @@ including two real bugs it caught:
   nothing. Both are fixed: `create_asgi_app(mcp, settings)` now takes the
   server instance explicitly, and auth tests go through real HTTP via
   `TestClient` with an actual `Authorization` header (`tests/test_auth.py`).
+
+<p align="center">
+  <img src="assets/coverage_by_layer.png" width="720" alt="Horizontal bar chart of statement counts by architectural layer: services 59, tools 42, models 38, transport 35, config 32, security 28, api 11, utils 9, all at 100 percent coverage">
+  <br>
+  <img src="assets/tests_per_file.png" width="720" alt="Horizontal bar chart of test counts per test file, from test_asgi.py at 2 tests to test_auth.py at 15 tests">
+</p>
+
+Bar colors in the first chart match the architecture diagram above —
+green for the core layer (services/models), orange for adapters
+(tools/api), indigo for transport, red for security — so the two visuals
+read as one system rather than two unrelated ones. `services` carries the
+most weight (59 statements) for the same reason it's the layer this
+project cares most about testing in isolation: it's where the actual
+business logic lives, deliberately kept free of any FastMCP import (see
+[Why this exists](#why-this-exists)). `test_auth.py` is the largest test
+file for the same reason auth got its own [dedicated
+section](#authentication) — it's the one piece of this codebase with real
+security consequences if it's wrong.
+
+Both charts are generated from real, freshly-measured data (a live
+`pytest --cov` run, `grep -c "def test_"` across `tests/*.py`, and the
+exact milestone numbers observed during this project's own build — see
+the growth chart above) by [`scripts/generate_charts.py`](scripts/generate_charts.py),
+not hand-drawn. Re-run it after the test suite changes enough to make the
+numbers stale.
 
 Network-dependent tests (`test_web_service.py`) use `httpx.MockTransport` —
 no real HTTP calls, no flakiness, no dependency on network access in

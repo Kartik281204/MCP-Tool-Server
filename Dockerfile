@@ -51,7 +51,7 @@ EXPOSE 8000
 
 # No curl/wget in the slim image -- a stdlib one-liner avoids adding either
 # just for this. Resolves the actual port the same way app/config/settings.py
-# does (PORT, then MCP_PORT, then 8000) rather than hardcoding 8000 --
+# does (MCP_PORT, then PORT, then 8000) rather than hardcoding 8000 --
 # otherwise this silently breaks for anyone overriding MCP_PORT, Railway's
 # dynamic PORT included.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

@@ -51,3 +51,39 @@ def test_mcp_endpoint_is_mounted_and_session_manager_is_running() -> None:
 
     assert response.status_code == 400
     assert "session" in response.json()["error"]["message"].lower()
+
+
+def test_docs_are_available_outside_production() -> None:
+    settings = Settings(_env_file=None, environment="development")
+
+    with _client(settings) as client:
+        docs = client.get("/docs")
+        openapi = client.get("/openapi.json")
+
+    assert docs.status_code == 200
+    assert openapi.status_code == 200
+
+
+def test_docs_are_disabled_in_production() -> None:
+    settings = Settings(_env_file=None, environment="production")
+
+    with _client(settings) as client:
+        docs = client.get("/docs")
+        redoc = client.get("/redoc")
+        openapi = client.get("/openapi.json")
+
+    assert docs.status_code == 404
+    assert redoc.status_code == 404
+    assert openapi.status_code == 404
+
+
+def test_health_endpoint_is_unaffected_by_production_docs_gating() -> None:
+    """/health has to keep working in production regardless -- it's the
+    one route infrastructure actually depends on.
+    """
+    settings = Settings(_env_file=None, environment="production")
+
+    with _client(settings) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200

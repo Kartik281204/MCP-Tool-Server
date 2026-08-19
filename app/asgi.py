@@ -38,6 +38,13 @@ def create_asgi_app(mcp: FastMCP, settings: Settings) -> FastAPI:
         title=settings.app_name,
         version=settings.app_version,
         lifespan=mcp_app.lifespan,
+        # /docs, /redoc, and /openapi.json are FastAPI's defaults and were
+        # exposed unconditionally here for a while -- fine for the one
+        # trivial route this app actually has (/health), but not something
+        # a production deployment should serve publicly by default.
+        docs_url=None if settings.is_production else "/docs",
+        redoc_url=None if settings.is_production else "/redoc",
+        openapi_url=None if settings.is_production else "/openapi.json",
     )
     # Route handlers resolve settings via `Depends(get_settings)`, which
     # would otherwise ignore the `settings` passed in here and fall back to

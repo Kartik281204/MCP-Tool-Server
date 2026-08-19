@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-3.x-6366f1)
 ![FastAPI](https://img.shields.io/badge/FastAPI-mounted-009688?logo=fastapi&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-53%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-56%20passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-multi--stage-2496ED?logo=docker&logoColor=white)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
@@ -130,7 +130,7 @@ app/
 ├── tools/          # MCP tool adapters: schema, metadata, ValueError -> ToolError translation
 ├── services/       # Pure business logic. No FastMCP import, anywhere.
 └── models/         # Pydantic schemas shared by tools/services/api
-tests/              # 53 tests, 100% line coverage (unit + integration, no real network calls)
+tests/              # 56 tests, 100% line coverage (unit + integration, no real network calls)
 ```
 
 ## Request lifecycle
@@ -374,7 +374,7 @@ one. Replace `OWNER` in each file with the actual GitHub owner/repo.
 | **Fly.io** | [`fly.toml`](fly.toml) | Fastest path to a live URL. `fly launch --no-deploy` once, then `fly deploy`. `kill_signal = "SIGTERM"` is set explicitly — Fly's own default is SIGINT, and this keeps shutdown behavior identical across all targets. |
 | **Cloud Run** | [`deploy/cloudrun/service.yaml`](deploy/cloudrun/service.yaml) | Declarative Knative spec; `gcloud run services replace` to apply. Startup/liveness probes against `/health` mirror Kubernetes probe syntax directly. |
 | **Kubernetes** | [`k8s/`](k8s/) | `deployment.yaml` (security-hardened: non-root uid 1000 matching the Dockerfile, read-only root filesystem, all capabilities dropped, a `preStop` sleep so rolling updates drain cleanly), `service.yaml`, `configmap.yaml`, `hpa.yaml` (2-10 replicas on 70% CPU), and `secret.example.yaml` — a template, deliberately excluded from `kustomization.yaml` so it's never accidentally applied as-is. `kubectl apply -k k8s/`. |
-| **Railway** | [`railway.json`](railway.json) | Detects the Dockerfile directly — connect the repo and it deploys, no GHCR step needed. `restartPolicyType: "ON_FAILURE"`, not `"ALWAYS"`: the latter restarts even on an intentional shutdown, which isn't what you want for a normal deploy/redeploy cycle. |
+| **Railway** | [`railway.json`](railway.json) | Detects the Dockerfile directly — connect the repo and it deploys, no GHCR step needed. `restartPolicyType: "ON_FAILURE"`, not `"ALWAYS"`: the latter restarts even on an intentional shutdown, which isn't what you want for a normal deploy/redeploy cycle. Unlike the other three, `MCP_ENVIRONMENT=production` isn't set anywhere in this repo for Railway — Railway variables live in its dashboard/CLI, not in `railway.json` — so set it there if you want `/docs` disabled (see [Configuration](#configuration)) the same way it already is on Fly/Cloud Run/Kubernetes. |
 
 **Railway specifically needed a real code fix, not just a config file.**
 Fly/Cloud Run/Kubernetes all let *you* pick a fixed port and configure the
@@ -429,7 +429,7 @@ full, commented list. The ones worth knowing about:
 | --- | --- | --- |
 | `MCP_TRANSPORT` | `http` | `stdio` for direct process spawning, `http` for a network service |
 | `MCP_HOST` / `MCP_PORT` | `0.0.0.0` / `8000` | Only used for the `http` transport |
-| `MCP_ENVIRONMENT` | `development` | `development` \| `staging` \| `production` |
+| `MCP_ENVIRONMENT` | `development` | `development` \| `staging` \| `production`. `production` also disables `/docs`, `/redoc`, and `/openapi.json`. |
 | `MCP_LOG_LEVEL` | `INFO` | Standard library log level name |
 | `MCP_API_KEYS` | *(empty)* | Comma-separated bearer tokens; empty disables auth entirely — see [Authentication](#authentication) |
 | `FASTMCP_CHECK_FOR_UPDATES` | `stable` | FastMCP pings PyPI on startup by default; set `off` in production |
@@ -476,7 +476,7 @@ async with Client(mcp) as client:
 ## Testing
 
 ```bash
-uv run pytest              # 53 tests, coverage report on by default (see pyproject.toml)
+uv run pytest              # 56 tests, coverage report on by default (see pyproject.toml)
 uv run ruff check .
 uv run mypy app
 ```
@@ -491,14 +491,19 @@ Real milestones, not a smoothed curve — Phases 5-7 (Docker, docs, CI/CD)
 genuinely added no new Python tests, and the chart shows that flat instead
 of hiding it. The two jumps are Phase 4 (closing coverage gaps found by
 `--cov-report=term-missing`) and Phase 8 (auth plus the masked-logging
-hardening that came out of testing it).
+hardening that came out of testing it). The final point is a refine pass
+over the finished project — see below.
 
-Coverage is 100% across all 255 statements in `app/`. That number is a
-byproduct of testing real behavior (every tool's error path, the settings
-validation, the `main()` transport dispatch, the FastAPI lifespan wiring),
-not a target chased for its own sake — the last few percentage points came
-directly from `pytest --cov-report=term-missing` pointing at genuine gaps,
-including two real bugs it caught:
+Coverage is 100% across all 255 statements in `app/`, and `pyproject.toml`
+sets `fail_under = 100` so that claim is enforced, not just true today by
+coincidence: `uv run pytest` exits non-zero the moment coverage drops below
+100%, verified with a positive control (a deliberately uncovered function,
+confirmed to fail the build, then removed) rather than taken on faith. That
+number is a byproduct of testing real behavior (every tool's error path,
+the settings validation, the `main()` transport dispatch, the FastAPI
+lifespan wiring), not a target chased for its own sake — the last few
+percentage points came directly from `pytest --cov-report=term-missing`
+pointing at genuine gaps, including two real bugs it caught:
 
 - `create_asgi_app(settings)` accepted a `settings` argument that the
   health route was silently ignoring in favor of the global cached
@@ -514,11 +519,23 @@ including two real bugs it caught:
   nothing. Both are fixed: `create_asgi_app(mcp, settings)` now takes the
   server instance explicitly, and auth tests go through real HTTP via
   `TestClient` with an actual `Authorization` header (`tests/test_auth.py`).
+- A later refine pass over the (by then "finished") project found two
+  more, of a different kind — not missing tests, but dead or misleading
+  surface area that had accumulated: `is_production` was defined, tested,
+  and never actually used anywhere, and `MCP_TRANSPORT` accepted `"sse"`
+  as a value that silently did nothing (never forwarded to
+  `mcp.http_app()`). Fixed by wiring `is_production` to actually disable
+  FastAPI's `/docs`, `/redoc`, and `/openapi.json` in production, and by
+  removing `"sse"` rather than leaving an option on that doesn't work —
+  offering a config value that's silently a no-op is worse than not
+  offering it. Also caught, in the same pass: a Dockerfile comment
+  describing the `MCP_PORT`/`PORT` fallback precedence *backwards* from
+  what the code directly below it actually did.
 
 <p align="center">
-  <img src="assets/coverage_by_layer.png" width="720" alt="Horizontal bar chart of statement counts by architectural layer: services 59, tools 42, models 38, transport 35, config 32, security 28, api 11, utils 9, all at 100 percent coverage">
+  <img src="assets/coverage_by_layer.png" width="720" alt="Horizontal bar chart of statement counts by architectural layer: services 59, tools 42, models 38, transport 36, config 32, security 28, api 11, utils 9, all at 100 percent coverage">
   <br>
-  <img src="assets/tests_per_file.png" width="720" alt="Horizontal bar chart of test counts per test file, from test_asgi.py at 2 tests to test_auth.py at 15 tests">
+  <img src="assets/tests_per_file.png" width="720" alt="Horizontal bar chart of test counts per test file, from test_main_entrypoint.py at 2 tests to test_auth.py at 15 tests">
 </p>
 
 Bar colors in the first chart match the architecture diagram above —
@@ -555,6 +572,7 @@ whatever environment runs the suite.
 - [x] Phase 7 — CI/CD (GitHub Actions: lint/type/test + Docker build & smoke test)
 - [x] Phase 8 — Opt-in API-key authentication for the MCP endpoint (+ masked audit logging, `gitleaks` in CI)
 - [x] Phase 9 — Deployability: GHCR image publish + Fly.io / Cloud Run / Kubernetes / Railway configs
+- [x] Refine pass — no new features; closed gaps a fresh critical read found in the "finished" project (dead `is_production` property now wired to gate `/docs` in production, a `MCP_TRANSPORT` value that silently did nothing, a backwards precedence comment in the Dockerfile, `fail_under = 100` so the coverage claim is enforced rather than just currently true)
 
 ## License
 

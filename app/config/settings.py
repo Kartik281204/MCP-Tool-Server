@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-TransportName = Literal["stdio", "http", "sse"]
+TransportName = Literal["stdio", "http"]
 Environment = Literal["development", "staging", "production"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
@@ -46,7 +46,8 @@ class Settings(BaseSettings):
 
     # Transport for the MCP server itself. "stdio" is used when a client
     # spawns this process directly; "http" runs it as a standalone network
-    # service, which is what the Docker deployment (a later phase) expects.
+    # service, which is what the Docker/Fly/Cloud Run/Kubernetes/Railway
+    # deployments in this repo all expect.
     transport: TransportName = "http"
     host: str = "0.0.0.0"
     # Some PaaS platforms (Railway, Heroku) assign a port dynamically and

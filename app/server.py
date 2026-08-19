@@ -1,6 +1,6 @@
 """MCP server application factory and process entrypoint.
 
-Phase 2 wires the tool registry (`app.tools.ALL_TOOLS`) into the FastMCP
+The tool registry (`app.tools.ALL_TOOLS`) is wired into the FastMCP
 instance at construction time. See app/tools/__init__.py for why tools are
 built standalone rather than via an `@mcp.tool` decorator.
 """

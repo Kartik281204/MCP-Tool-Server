@@ -53,6 +53,7 @@ addopts = "--cov=app --cov-report=term-missing"
 source = ["app"]
 
 [tool.coverage.report]
+fail_under = 100
 exclude_also = [
     "if __name__ == .__main__.:",
 ]

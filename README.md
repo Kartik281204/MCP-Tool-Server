@@ -5,7 +5,7 @@
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastMCP](https://img.shields.io/badge/FastMCP-3.x-6366f1)
 ![FastAPI](https://img.shields.io/badge/FastAPI-mounted-009688?logo=fastapi&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-56%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-68%20passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
 ![Docker](https://img.shields.io/badge/docker-multi--stage-2496ED?logo=docker&logoColor=white)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
@@ -63,6 +63,14 @@ before you read the code:
 - **Auth is opt-in, not bolted on as an afterthought.** `app/security/`
   holds one job: verify a bearer token. It's a `TokenVerifier` FastMCP
   already knows how to consume, not a custom middleware reinventing that.
+- **A tool that fetches arbitrary URLs, called by an AI agent, is an SSRF
+  vector by default.** `fetch_url_metadata` resolves the hostname and
+  checks the actual IP before ever connecting — a caller (or a model
+  prompt-injected into calling it) pointing it at `169.254.169.254`
+  (cloud instance metadata) or an internal `10.x`/`192.168.x` address
+  gets refused, not a credential leak. Scoped deliberately: this closes
+  the direct case, not DNS rebinding, which needs transport-layer
+  enforcement rather than a pre-request check like this one.
 - **Two ASGI apps, one port** — see [Architecture](#architecture) below.
 
 ## Architecture
@@ -130,7 +138,7 @@ app/
 ├── tools/          # MCP tool adapters: schema, metadata, ValueError -> ToolError translation
 ├── services/       # Pure business logic. No FastMCP import, anywhere.
 └── models/         # Pydantic schemas shared by tools/services/api
-tests/              # 56 tests, 100% line coverage (unit + integration, no real network calls)
+tests/              # 68 tests, 100% line coverage (unit + integration, no real network calls)
 ```
 
 ## Request lifecycle
@@ -250,7 +258,7 @@ async with Client("http://localhost:8000/mcp", auth="key-for-client-a") as clien
 | Tool | Style | Tags | Description |
 | --- | --- | --- | --- |
 | `analyze_text` | sync | `text`, `utility` | Word/character/sentence counts and an estimated reading time. |
-| `fetch_url_metadata` | async | `network`, `utility` | Status code, headers, and response time for an http/https URL. Only transport failures raise — a 404 is valid data. |
+| `fetch_url_metadata` | async | `network`, `utility` | Status code, headers, and response time for an http/https URL. Refuses hosts that resolve to a private/internal address (SSRF protection — see [Why this exists](#why-this-exists)). Only transport failures raise — a 404 is valid data. |
 | `convert_temperature` | sync | `math`, `utility` | Convert between celsius, fahrenheit, and kelvin; rejects values below absolute zero. |
 
 Each carries MCP tool annotations (`readOnlyHint`, `idempotentHint` /
@@ -476,7 +484,7 @@ async with Client(mcp) as client:
 ## Testing
 
 ```bash
-uv run pytest              # 56 tests, coverage report on by default (see pyproject.toml)
+uv run pytest              # 68 tests, coverage report on by default (see pyproject.toml)
 uv run ruff check .
 uv run mypy app
 ```
@@ -494,7 +502,7 @@ of hiding it. The two jumps are Phase 4 (closing coverage gaps found by
 hardening that came out of testing it). The final point is a refine pass
 over the finished project — see below.
 
-Coverage is 100% across all 255 statements in `app/`, and `pyproject.toml`
+Coverage is 100% across all 275 statements in `app/`, and `pyproject.toml`
 sets `fail_under = 100` so that claim is enforced, not just true today by
 coincidence: `uv run pytest` exits non-zero the moment coverage drops below
 100%, verified with a positive control (a deliberately uncovered function,
@@ -531,11 +539,23 @@ pointing at genuine gaps, including two real bugs it caught:
   offering it. Also caught, in the same pass: a Dockerfile comment
   describing the `MCP_PORT`/`PORT` fallback precedence *backwards* from
   what the code directly below it actually did.
+- A further pass, reading `fetch_url_metadata` specifically with a
+  security lens rather than a correctness one, found the SSRF gap
+  described above. Fixing it exposed a second issue in the fix itself:
+  the obvious implementation does real DNS resolution before ever
+  touching the (correctly mocked) HTTP client, which would have silently
+  made every existing `MockTransport`-based test in this file dependent
+  on real DNS working from wherever the suite happened to run — exactly
+  what mocking the transport was supposed to prevent, just one layer
+  down. Fixed by injecting the resolver the same way the HTTP client
+  already was, then verified the fix against the actual attack it closes:
+  a real MCP tool call to `169.254.169.254` (cloud metadata) through the
+  full stack, blocked; a real call to a genuine public site, unaffected.
 
 <p align="center">
-  <img src="assets/coverage_by_layer.png" width="720" alt="Horizontal bar chart of statement counts by architectural layer: services 59, tools 42, models 38, transport 36, config 32, security 28, api 11, utils 9, all at 100 percent coverage">
+  <img src="assets/coverage_by_layer.png" width="720" alt="Horizontal bar chart of statement counts by architectural layer: services 79, tools 42, models 38, transport 36, config 32, security 28, api 11, utils 9, all at 100 percent coverage">
   <br>
-  <img src="assets/tests_per_file.png" width="720" alt="Horizontal bar chart of test counts per test file, from test_main_entrypoint.py at 2 tests to test_auth.py at 15 tests">
+  <img src="assets/tests_per_file.png" width="720" alt="Horizontal bar chart of test counts per test file, from test_main_entrypoint.py at 2 tests to test_web_service.py at 17 tests">
 </p>
 
 Bar colors in the first chart match the architecture diagram above —
@@ -572,7 +592,7 @@ whatever environment runs the suite.
 - [x] Phase 7 — CI/CD (GitHub Actions: lint/type/test + Docker build & smoke test)
 - [x] Phase 8 — Opt-in API-key authentication for the MCP endpoint (+ masked audit logging, `gitleaks` in CI)
 - [x] Phase 9 — Deployability: GHCR image publish + Fly.io / Cloud Run / Kubernetes / Railway configs
-- [x] Refine pass — no new features; closed gaps a fresh critical read found in the "finished" project (dead `is_production` property now wired to gate `/docs` in production, a `MCP_TRANSPORT` value that silently did nothing, a backwards precedence comment in the Dockerfile, `fail_under = 100` so the coverage claim is enforced rather than just currently true)
+- [x] Refine pass — no new features; closed gaps a fresh critical read found in the "finished" project: dead `is_production` property (now wired to gate `/docs` in production), a `MCP_TRANSPORT` value that silently did nothing, a backwards precedence comment in the Dockerfile, `fail_under = 100` so the coverage claim is enforced rather than just currently true, and an SSRF gap in `fetch_url_metadata` (arbitrary-URL tools called by AI agents are a real attack surface) closed with DNS-resolution-based address checking
 
 ## License
 

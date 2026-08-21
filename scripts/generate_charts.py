@@ -65,7 +65,7 @@ phases = [
     "P5\nDocker", "P6\nDocs", "P7\nCI/CD", "P8\nAuth",
     "P8+\nHardening", "P9\nDeploy", "Refine",
 ]
-counts = [3, 20, 22, 32, 32, 32, 32, 45, 50, 53, 56]
+counts = [3, 20, 22, 32, 32, 32, 32, 45, 50, 53, 68]
 
 fig, ax = plt.subplots(figsize=(10, 4.5))
 ax.plot(phases, counts, color=INDIGO, linewidth=2.5, marker="o", markersize=7,
@@ -88,7 +88,7 @@ savefig(fig, "test_growth")
 # --- Chart 2: statements by architectural layer (100% covered, all of it) -
 layers = ["services", "tools", "models", "transport\n(server/asgi)",
           "config", "security", "api", "utils"]
-statements = [59, 42, 38, 36, 32, 28, 11, 9]
+statements = [79, 42, 38, 36, 32, 28, 11, 9]
 colors = [GREEN, ORANGE, GREEN, INDIGO, SLATE, RED, ORANGE, SLATE]
 
 fig, ax = plt.subplots(figsize=(9, 5))
@@ -96,7 +96,7 @@ y_pos = range(len(layers))
 bars = ax.barh(y_pos, statements, color=colors, height=0.62, zorder=3)
 ax.set_yticks(y_pos, labels=layers)
 ax.invert_yaxis()
-ax.set_xlabel("Statements (all covered — 255/255, 100%)")
+ax.set_xlabel("Statements (all covered — 275/275, 100%)")
 ax.set_title("Test coverage by architectural layer")
 for bar, val in zip(bars, statements, strict=True):
     ax.text(val + 1, bar.get_y() + bar.get_height() / 2, f"{val}  •  100%",
@@ -111,10 +111,10 @@ savefig(fig, "coverage_by_layer")
 
 # --- Chart 3: tests per file ------------------------------------------
 files = [
-    ("test_auth.py", 15), ("test_config_settings.py", 11),
+    ("test_web_service.py", 17), ("test_auth.py", 15), ("test_config_settings.py", 11),
     ("test_tools_registration.py", 6), ("test_conversion_service.py", 5),
-    ("test_web_service.py", 5), ("test_text_analysis_service.py", 4),
-    ("test_bootstrap.py", 3), ("test_asgi.py", 5), ("test_main_entrypoint.py", 2),
+    ("test_text_analysis_service.py", 4), ("test_asgi.py", 5),
+    ("test_bootstrap.py", 3), ("test_main_entrypoint.py", 2),
 ]
 files.sort(key=lambda x: x[1])
 names = [f[0] for f in files]
@@ -124,7 +124,7 @@ fig, ax = plt.subplots(figsize=(9, 5))
 y_pos = range(len(names))
 ax.barh(y_pos, vals, color=INDIGO, height=0.6, zorder=3, alpha=0.85)
 ax.set_yticks(y_pos, labels=names, fontfamily="monospace", fontsize=9)
-ax.set_xlabel("Number of tests  (56 total)")
+ax.set_xlabel("Number of tests  (68 total)")
 ax.set_title("Tests per file")
 for i, v in enumerate(vals):
     ax.text(v + 0.15, i, str(v), va="center", fontsize=9, fontweight="bold")

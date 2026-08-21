@@ -15,8 +15,10 @@ async def fetch_url_metadata(url: str, timeout_seconds: float = 10.0) -> UrlMeta
 
     Does not raise on HTTP error status codes (4xx/5xx) -- those come back as
     data, since a 404 is a valid answer to "what does this URL return?". Only
-    transport-level failures (timeout, DNS, connection refused, bad scheme)
-    raise.
+    transport-level failures raise: timeout, DNS, connection refused, bad
+    scheme, or the host resolving to a private/internal address (this tool
+    refuses to fetch RFC1918/loopback/link-local targets, including cloud
+    metadata endpoints -- see app/services/web_service.py).
 
     Args:
         url: The http/https URL to check.

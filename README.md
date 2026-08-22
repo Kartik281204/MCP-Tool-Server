@@ -10,7 +10,7 @@
 ![Docker](https://img.shields.io/badge/docker-multi--stage-2496ED?logo=docker&logoColor=white)
 ![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?logo=githubactions&logoColor=white)
 ![Deploy](https://img.shields.io/badge/deploy-Fly.io%20%C2%B7%20Cloud%20Run%20%C2%B7%20K8s%20%C2%B7%20Railway-326CE5?logo=kubernetes&logoColor=white)
-![Auth](https://img.shields.io/badge/auth-API%20key%20(opt--in)-6b21a8)
+![Auth](https://img.shields.io/badge/auth-opt--in%20API%20key-6b21a8)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 **A production-shaped [MCP](https://modelcontextprotocol.io/) tool server** built with
@@ -323,7 +323,9 @@ docker run --rm -p 8000:8000 --env-file .env -e MCP_HOST=0.0.0.0 mcp-tool-server
 
 ## CI/CD
 
-Two jobs, on every push and PR to `main`:
+Four jobs. `test`, `secret-scan`, and `docker` run on every push and PR to
+`main`; `publish` only runs on push to `main`, and only if the other three
+all pass:
 
 | Job | What it runs |
 | --- | --- |
@@ -492,7 +494,7 @@ uv run mypy app
 The same three commands run in CI on every push — see [CI/CD](#cicd).
 
 <p align="center">
-  <img src="assets/test_growth.png" width="720" alt="Line chart showing the test suite growing from 3 tests in Phase 1 to 53 in Phase 9, plateauing at 32 through the Docker/docs/CI phases">
+  <img src="assets/test_growth.png" width="720" alt="Line chart showing the test suite growing from 3 tests in Phase 1 to 68 after a refine pass, plateauing at 32 through the Docker/docs/CI phases">
 </p>
 
 Real milestones, not a smoothed curve — Phases 5-7 (Docker, docs, CI/CD)
@@ -562,13 +564,16 @@ Bar colors in the first chart match the architecture diagram above —
 green for the core layer (services/models), orange for adapters
 (tools/api), indigo for transport, red for security — so the two visuals
 read as one system rather than two unrelated ones. `services` carries the
-most weight (59 statements) for the same reason it's the layer this
+most weight (79 statements) for the same reason it's the layer this
 project cares most about testing in isolation: it's where the actual
 business logic lives, deliberately kept free of any FastMCP import (see
-[Why this exists](#why-this-exists)). `test_auth.py` is the largest test
-file for the same reason auth got its own [dedicated
-section](#authentication) — it's the one piece of this codebase with real
-security consequences if it's wrong.
+[Why this exists](#why-this-exists)). `test_web_service.py` is the largest
+test file — 17 cases from 11 test functions, since the SSRF check is
+verified with a `@pytest.mark.parametrize` matrix across seven different
+blocked-address ranges rather than one test per range copy-pasted; by raw
+function count `test_auth.py` (15) is still larger, which tracks with why
+auth got its own [dedicated section](#authentication) — it's the other
+piece of this codebase with real security consequences if it's wrong.
 
 Both charts are generated from real, freshly-measured data (a live
 `pytest --cov` run, `grep -c "def test_"` across `tests/*.py`, and the
